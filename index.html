@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monitor Fourier — Sistema Completo</title>
+<style>
+:root{
+  /* Variables Modo Oscuro (ZEGEN) */
+  --bg:#111111; --monitor-bg:#000000; --panel:#050505;
+  --border:#222222; --border-bright:#333333;
+  --trace: #00ff00; --trace-fft: #ffcc00;
+  --trace-blue: #00ccff; --trace-red: #ff3333;
+  --text:#ffffff; --text-dim:#888888;
+  --amber:#ffb000; --red:#ff3333;
+  --grid-line: rgba(0, 255, 0, 0.05); --grid-bold: rgba(0, 255, 0, 0.15);
+  --font:'Consolas','Menlo','Courier New',monospace;
+}
+
+/* Variables Modo Claro (Papel Clínico) */
+body.light-mode {
+  --bg:#e0e0e0; --monitor-bg:#ffffff; --panel:#f5f5f5;
+  --border:#cccccc; --border-bright:#999999;
+  --trace: #008800; --trace-fft: #cc9900;
+  --trace-blue: #0066cc; --trace-red: #cc0000;
+  --text:#000000; --text-dim:#555555;
+  --amber:#cc8800; --red:#cc0000;
+  --grid-line: rgba(0, 200, 0, 0.1); --grid-bold: rgba(0, 200, 0, 0.25);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  min-height:100vh; background-color:var(--bg); color:var(--text); font-family:var(--font); font-size:14px;
+  display:flex; flex-direction:column; align-items:center; padding:24px 16px;
+  transition: background-color 0.3s, color 0.3s;
+}
+
+/* ================================================================
+   NUEVO LAYOUT: Contenedor principal y barra lateral
+   ================================================================ */
+.app-layout {
+  display: flex;
+  flex-direction: row; /* Botón a la izquierda, monitores a la derecha */
+  align-items: flex-start;
+  gap: 24px;
+  width: 100%;
+  max-width: 1250px; /* 1080 del monitor + 150 del botón + margen */
+  justify-content: center;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 10px;
+  position: sticky; /* Se queda fijo si haces scroll */
+  top: 24px;
+}
+
+.main-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+  max-width: 1080px; /* Ancho máximo del monitor */
+}
+
+/* En pantallas más pequeñas, el botón se pone arriba para no encimarse */
+@media (max-width: 1200px) {
+  .app-layout {
+    flex-direction: column;
+    align-items: center;
+  }
+  .sidebar {
+    position: static;
+    width: 100%;
+    max-width: 1080px;
+    padding-top: 0;
+    align-items: flex-start;
+  }
+}
+
+/* ---------- Botón de Tema ---------- */
+.btn-theme { 
+  background: var(--panel); 
+  border: 1px solid var(--border-bright); 
+  color: var(--text); 
+  padding: 10px 16px; 
+  border-radius: 8px; 
+  cursor: pointer; 
+  font-size: 14px; 
+  font-family: sans-serif;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  transition: all 0.3s ease;
+  display: flex; align-items: center; gap: 8px;
+  white-space: nowrap;
+}
+.btn-theme:hover { 
+  border-color: var(--trace); 
+  color: var(--trace); 
+  box-shadow: 0 0 15px rgba(0,255,0,0.2);
+}
+body.light-mode .btn-theme:hover {
+  box-shadow: 0 0 15px rgba(0, 136, 0, 0.2);
+}
+
+/* ---------- Zona principal ---------- */
+.monitor{
+  width:100%; background:var(--monitor-bg); border:4px solid var(--border-bright);
+  border-radius:8px; overflow:hidden; box-shadow:0 0 0 1px var(--border), 0 20px 60px rgba(0,0,0,0.3);
+  transition: background-color 0.3s, border-color 0.3s;
+}
+
+/* ---------- Barra superior ---------- */
+.topbar{
+  display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 16px;
+  background:var(--monitor-bg); border-bottom:1px solid var(--border-bright); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+}
+.brand{color:var(--trace); font-weight:bold; display:flex; align-items:center; gap:8px}
+.brand .dot{width:8px;height:8px;border-radius:50%;background:var(--trace); box-shadow:0 0 8px var(--trace); animation:pulse 2s infinite}
+.time{color:var(--text); font-variant-numeric:tabular-nums; font-weight:bold;}
+.live{display:flex; align-items:center; gap:6px; font-weight:bold}
+.live .dot{width:8px;height:8px;border-radius:50%}
+.live.standby{color:var(--amber)} .live.standby .dot{background:var(--amber); box-shadow:0 0 8px var(--amber); animation:pulse 2s infinite}
+.live.on{color:var(--trace)} .live.on .dot{background:var(--trace); box-shadow:0 0 10px var(--trace); animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:.15}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ---------- Zona de pantallas ---------- */
+.screen-wrap{display:grid; grid-template-columns:1fr 220px; border-bottom:1px solid var(--border-bright);}
+@media(max-width:720px){.screen-wrap{grid-template-columns:1fr}}
+
+.screen{padding:12px; background:var(--monitor-bg); position:relative; display: flex; flex-direction: column; gap: 8px;}
+.canvas-container { position: relative; width: 100%; }
+canvas{display:block; width:100%; height:auto; border-radius:2px; border:1px solid var(--border); background: var(--monitor-bg);}
+
+/* Efecto Scanlines solo en modo oscuro */
+body:not(.light-mode) .screen::after, body:not(.light-mode) .screen-block::after {
+  content:''; position:absolute; inset:12px; pointer-events:none; border-radius:2px;
+  background:repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0, rgba(0,0,0,0) 2px, rgba(0,0,0,.3) 2px, rgba(0,0,0,.3) 3px);
+}
+
+/* Fórmula Matemática Estilo Imagen */
+.math-formula {
+  background: var(--panel); border: 1px solid var(--border); padding: 12px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center; min-height: 50px;
+  font-family: 'Times New Roman', Times, serif; font-size: 18px;
+  letter-spacing: 0.5px; transition: color 0.3s; color: var(--text);
+  white-space: nowrap; overflow-x: auto; 
+}
+.math-formula i { font-style: italic; font-family: 'Times New Roman', Times, serif; }
+.math-formula .op { margin: 0 4px; }
+
+/* Fracciones Verticales (CSS) */
+.fraction {
+  display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle;
+  line-height: 1.1; margin: 0 4px; font-size: 0.85em; position: relative; top: -2px;
+}
+.fraction .num { border-bottom: 1.5px solid currentColor; padding: 0 4px; }
+.fraction .den { padding: 0 4px; }
+.fraction sup { font-size: 0.6em; }
+
+/* Panel lateral */
+.side-panel{border-left:1px solid var(--border-bright); padding:8px; display:flex; flex-direction:column; gap:8px; background:var(--panel);}
+@media(max-width:720px){ .side-panel{border-left:0;border-top:1px solid var(--border-bright); flex-direction:row; flex-wrap:wrap} .readout{flex:1 1 40%} .legend-box{width: 100%;} }
+.readout{border:1px solid var(--border); border-radius:4px; padding:8px 10px; background:var(--monitor-bg);}
+.readout .label{font-size:10px; letter-spacing:.18em; color:var(--text-dim); display:block; margin-bottom:2px;}
+.readout .value{font-size:28px; font-weight:bold; color:var(--trace); text-shadow:0 0 10px rgba(0, 255, 0, 0.4); font-variant-numeric:tabular-nums; line-height:1; display:block; transition: color 0.2s, text-shadow 0.2s;}
+.readout .value.small{font-size:15px; letter-spacing:.04em}
+.readout .unit{font-size:11px; color:var(--text-dim) !important; margin-left:4px; font-weight:normal; text-shadow: none !important;}
+
+/* Leyenda del Gráfico */
+.legend-box {
+  background: var(--monitor-bg); border: 1px solid var(--border); padding: 10px;
+  border-radius: 4px; font-family: var(--font); font-size: 11px; color: var(--text);
+  display: none; flex-direction: column; gap: 6px;
+}
+.legend-item { display: flex; align-items: center; gap: 8px; }
+.legend-line { width: 25px; height: 0; border-top: 2px solid; }
+.legend-line.dashed { border-top-style: dashed; }
+.legend-line.dotted { border-top-style: dotted; }
+.legend-line.thick { border-top-width: 3px; }
+
+/* Stack FFT y Espectrograma */
+.screen-stack{display:flex; flex-direction:column; gap:10px; padding:12px; background:var(--monitor-bg);}
+.screen-block{position:relative; border-radius:2px; overflow:hidden; border:1px solid var(--border); background:var(--monitor-bg);}
+.screen-block canvas{display:block; width:100%; height:auto}
+.screen-block::after { inset: 0; }
+
+/* Tooltip FFT */
+.fft-tooltip {
+  position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.85); border: 1px solid var(--trace-fft);
+  padding: 6px 10px; border-radius: 4px; color: #fff; font-size: 12px; pointer-events: none;
+  display: none; z-index: 10; box-shadow: 0 0 10px rgba(255, 204, 0, 0.2);
+}
+.fft-tooltip span { color: var(--trace-fft); font-weight: bold; }
+
+/* Controles */
+.controls{padding:16px; display:grid; grid-template-columns:1fr 1fr; gap:14px 24px; background:var(--panel);}
+@media(max-width:720px){.controls{grid-template-columns:1fr}}
+.ctrl{display:flex; flex-direction:column; gap:6px}
+.ctrl label{font-size:11px; letter-spacing:.14em; color:var(--text-dim); display:flex; justify-content:space-between; text-transform:uppercase;}
+.ctrl label b{color:var(--trace); font-weight:normal; font-variant-numeric:tabular-nums}
+
+/* Sliders y Botones +/- */
+.slider-row { display: flex; align-items: center; gap: 8px; }
+input[type=range]{ -webkit-appearance:none; appearance:none; flex: 1; height:6px; border-radius:3px; outline:none; cursor:pointer; background:var(--border-bright); }
+input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:16px; height:16px; border-radius:50%; background:var(--trace); border:2px solid var(--monitor-bg); box-shadow:0 0 10px var(--trace); cursor:pointer; }
+input[type=range]::-moz-range-thumb{ width:14px; height:14px; border-radius:50%; background:var(--trace); border:2px solid var(--monitor-bg); box-shadow:0 0 10px var(--trace); cursor:pointer; }
+.btn-adj { background: var(--monitor-bg); border: 1px solid var(--border-bright); color: var(--text-dim); width: 24px; height: 24px; border-radius: 4px; cursor: pointer; font-weight: bold; display: flex; justify-content: center; align-items: center; transition: all 0.2s; }
+.btn-adj:hover { background: var(--border); color: var(--text); border-color: var(--trace); }
+
+select{ background:var(--monitor-bg); color:var(--trace); border:1px solid var(--border-bright); border-radius:4px; padding:8px 10px; font-family:var(--font); font-size:13px; outline:none; }
+select:focus{border-color:var(--trace); box-shadow:0 0 8px rgba(0,255,0,.3)}
+
+/* Switch */
+.switch-container { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); cursor: pointer; user-select: none; }
+.switch { position: relative; display: inline-block; width: 34px; height: 18px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider-switch { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--border-bright); transition: .4s; border-radius: 18px; }
+.slider-switch:before { position: absolute; content: ""; height: 14px; width: 14px; left: 2px; bottom: 2px; background-color: var(--monitor-bg); transition: .4s; border-radius: 50%; }
+input:checked + .slider-switch { background-color: var(--trace); }
+input:checked + .slider-switch:before { transform: translateX(16px); }
+
+.actions{grid-column:1/-1; display:flex; gap:10px; align-items:center; padding-top:4px; flex-wrap:wrap}
+button.btn-main{ font-family:var(--font); font-size:12px; letter-spacing:.15em; padding:10px 20px; border-radius:4px; text-transform:uppercase; border:1px solid var(--trace); background:var(--monitor-bg); color:var(--trace); cursor:pointer; transition:all .15s; font-weight:bold; }
+button.btn-main:hover:not(:disabled){background:rgba(0,255,0,.1); box-shadow:0 0 14px rgba(0,255,0,.3)}
+button.btn-main:disabled{opacity:.3; cursor:default}
+button.btn-main.stop{border-color:var(--red); color:var(--red)}
+button.btn-main.stop:hover:not(:disabled){background:rgba(255,51,51,.1); box-shadow:0 0 14px rgba(255,51,51,.3)}
+
+.warning{grid-column:1/-1; font-size:11px; letter-spacing:.05em; color:var(--amber); border:1px solid rgba(255,176,0,.3); background:var(--monitor-bg); padding:8px 12px; border-radius:4px; line-height:1.5;}
+</style>
+</head>
+<body>
+
+<!-- Contenedor Principal -->
+<div class="app-layout">
+  
+  <!-- Barra Lateral (Botón) -->
+  <div class="sidebar">
+    <button class="btn-theme" id="themeToggle">☀️ Modo Claro</button>
+  </div>
+
+  <!-- Contenido (Monitores) -->
+  <div class="main-content">
+    
+    <!-- MÓDULO 1 -->
+    <div class="monitor">
+      <div class="topbar">
+        <div class="brand"><span class="dot"></span>Fourier Monitor</div>
+        <div class="time" id="clock">--:--:--</div>
+        <div class="live standby" id="liveInd"><span class="dot"></span><span id="liveText">READY</span></div>
+      </div>
+
+      <div class="screen-wrap">
+        <div class="screen">
+          <div class="canvas-container">
+            <canvas id="lienzo" width="900" height="360"></canvas>
+          </div>
+          <div class="math-formula" id="formulaDisplay"></div>
+        </div>
+        <div class="side-panel">
+          <!-- LEYENDA -->
+          <div class="legend-box" id="legendBox">
+            <div class="legend-item"><div class="legend-line dashed" style="border-color:var(--text);"></div> Fundamental</div>
+            <div class="legend-item"><div class="legend-line dashed" style="border-color:#0055ff;"></div> Armónico 3º</div>
+            <div class="legend-item"><div class="legend-line dotted" style="border-color:#00aa00;"></div> Armónico 5º</div>
+            <div class="legend-item"><div class="legend-line dashed" style="border-color:#ff8800; border-top-width:2px;"></div> Armónico 7º</div>
+            <div class="legend-item"><div class="legend-line thick" id="legendMainSignal" style="border-color:#00ff00;"></div> Señal Sumada</div>
+          </div>
+
+          <div class="readout"><span class="label">Frecuencia</span><span class="value" id="rFrec">50<span class="unit">Hz</span></span></div>
+          <div class="readout"><span class="label">Amplitud</span><span class="value" id="rAmp">1.00</span></div>
+          <div class="readout"><span class="label">Armónicos</span><span class="value" id="rArm">7</span></div>
+          <div class="readout"><span class="label">Fase</span><span class="value" id="rPhase">0°</span></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="ctrl">
+          <label>Forma de onda</label>
+          <select id="forma">
+            <option value="seno">Senoidal</option>
+            <option value="cuadrada" selected>Cuadrada</option>
+            <option value="triangular">Triangular</option>
+            <option value="sierra">Diente de sierra</option>
+          </select>
+        </div>
+        <div class="ctrl">
+          <label style="justify-content: flex-start; gap: 10px; cursor:pointer;">
+            <div class="switch-container">
+              <label class="switch"><input type="checkbox" id="toggleArmonicos" checked><span class="slider-switch"></span></label>
+              Mostrar armónicos
+            </div>
+          </label>
+        </div>
+        <div class="ctrl">
+          <label>Frecuencia <b><span id="vFrec">50</span> Hz</b></label>
+          <div class="slider-row">
+            <button class="btn-adj" onclick="adjustSlider('frec', -1)">-</button>
+            <input id="frec" type="range" min="20" max="2000" step="1" value="50">
+            <button class="btn-adj" onclick="adjustSlider('frec', 1)">+</button>
+          </div>
+        </div>
+        <div class="ctrl">
+          <label>Amplitud <b><span id="vAmp">1.00</span></b></label>
+          <div class="slider-row">
+            <button class="btn-adj" onclick="adjustSlider('amp', -0.01)">-</button>
+            <input id="amp" type="range" min="0" max="1" step="0.01" value="1.00">
+            <button class="btn-adj" onclick="adjustSlider('amp', 0.01)">+</button>
+          </div>
+        </div>
+        <div class="ctrl">
+          <label>Armónicos <b><span id="vArm">7</span></b></label>
+          <div class="slider-row">
+            <button class="btn-adj" onclick="adjustSlider('arm', -1)">-</button>
+            <input id="arm" type="range" min="1" max="100" step="1" value="7">
+            <button class="btn-adj" onclick="adjustSlider('arm', 1)">+</button>
+          </div>
+        </div>
+        <div class="ctrl">
+          <label>Fase <b><span id="vPhase">0</span>°</b></label>
+          <div class="slider-row">
+            <button class="btn-adj" onclick="adjustSlider('phase', -10)">-</button>
+            <input id="phase" type="range" min="0" max="360" step="1" value="0">
+            <button class="btn-adj" onclick="adjustSlider('phase', 10)">+</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="btnPlay" class="btn-main">▶ Reproducir</button>
+          <button id="btnStop" class="btn-main stop" disabled>■ Detener</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MÓDULO 2 -->
+    <div class="monitor">
+      <div class="topbar">
+        <div class="brand"><span class="dot" style="background:var(--trace-fft); box-shadow:0 0 8px var(--trace-fft);"></span> FFT & Spectrogram</div>
+        <div class="time" id="clock2">--:--:--</div>
+        <div class="live standby" id="micInd"><span class="dot"></span><span id="micText">OFFLINE</span></div>
+      </div>
+
+      <div class="screen-wrap">
+        <div class="screen-stack">
+          <div class="screen-block">
+            <canvas id="timeCanvas" width="900" height="180"></canvas>
+          </div>
+          <div class="screen-block" id="fftContainer">
+            <canvas id="fftCanvas" width="900" height="200"></canvas>
+            <div class="fft-tooltip" id="fftTooltip">
+              Frec: <span id="tooltipFreq">0</span> Hz<br>Nivel: <span id="tooltipLevel">0</span>%
+            </div>
+          </div>
+          <div class="screen-block">
+            <canvas id="specCanvas" width="900" height="120"></canvas>
+          </div>
+        </div>
+        <div class="side-panel">
+          <div class="readout"><span class="label">Pico FFT</span><span class="value small" id="rPeak" style="color:var(--trace-fft);">-- Hz</span></div>
+          <div class="readout"><span class="label">Nivel</span><span class="value small" id="rLevel" style="color:var(--trace-fft);">--</span></div>
+          <div class="readout"><span class="label">RMS</span><span class="value small" id="rRms" style="color:var(--trace-fft);">--</span></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="actions">
+          <button id="startMicBtn" class="btn-main" style="border-color:var(--trace-fft); color:var(--trace-fft);">▶ Micrófono</button>
+          <button id="stopMicBtn" class="btn-main stop" disabled>■ Detener</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   UTILIDADES GENERALES
+   ================================================================ */
+function setupHiDPI(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return { ctx, width: rect.width, height: rect.height };
+}
+
+function adjustSlider(id, amount) {
+  const slider = document.getElementById(id);
+  const min = parseFloat(slider.min) || 0;
+  const max = parseFloat(slider.max) || 100;
+  let val = parseFloat(slider.value) + amount;
+  val = Math.max(min, Math.min(max, val));
+  val = parseFloat(val.toFixed(3));
+  if (slider.value != val) {
+    slider.value = val;
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+}
+
+function enableScrollOnSlider(slider) {
+  slider.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const direction = e.deltaY > 0 ? -1 : 1;
+    const step = parseFloat(slider.step) || 1;
+    let val = parseFloat(slider.value) + direction * step;
+    val = Math.max(parseFloat(slider.min), Math.min(parseFloat(slider.max), val));
+    if (slider.value != val) {
+      slider.value = val;
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }, { passive: false });
+}
+
+function getThemeColors() {
+  const isLight = document.body.classList.contains('light-mode');
+  return {
+    bg: isLight ? '#ffffff' : '#000000',
+    grid: isLight ? 'rgba(0, 0, 0, 0.05)' : 'rgba(0, 255, 0, 0.05)',
+    gridBold: isLight ? 'rgba(0, 0, 0, 0.1)' : 'rgba(0, 255, 0, 0.15)',
+    axis: isLight ? 'rgba(0, 0, 0, 0.6)' : 'rgba(0, 255, 0, 0.4)',
+    text: isLight ? '#000000' : '#ffffff'
+  };
+}
+
+/* ================================================================
+   TEMA OSCURO / CLARO
+   ================================================================ */
+document.getElementById('themeToggle').addEventListener('click', () => {
+  document.body.classList.toggle('light-mode');
+  const isLight = document.body.classList.contains('light-mode');
+  document.getElementById('themeToggle').textContent = isLight ? '🌙 Modo Oscuro' : '☀️ Modo Claro';
+  window.dispatchEvent(new Event('resize'));
+});
+
+/* ================================================================
+   MÓDULO 1 · Síntesis
+   ================================================================ */
+(() => {
+  let canvas = document.getElementById('lienzo');
+  let ctx, W, H, cy;
+  
+  function resize() {
+    const setup = setupHiDPI(canvas);
+    ctx = setup.ctx; W = setup.width; H = setup.height; cy = H / 2;
+    dibujar();
+  }
+
+  const elForma = document.getElementById('forma');
+  const elFrec  = document.getElementById('frec');
+  const elAmp   = document.getElementById('amp');
+  const elArm   = document.getElementById('arm');
+  const elPhase = document.getElementById('phase');
+  const toggleArmonicos = document.getElementById('toggleArmonicos');
+  const legendBox = document.getElementById('legendBox');
+  const legendMainSignal = document.getElementById('legendMainSignal');
+  const formulaDisplay = document.getElementById('formulaDisplay');
+
+  const rFrec = document.getElementById('rFrec');
+  const rAmp  = document.getElementById('rAmp');
+  const rArm  = document.getElementById('rArm');
+  const rPhase= document.getElementById('rPhase');
+  const vFrec = document.getElementById('vFrec');
+  const vAmp  = document.getElementById('vAmp');
+  const vArm  = document.getElementById('vArm');
+  const vPhase= document.getElementById('vPhase');
+
+  const liveInd = document.getElementById('liveInd');
+  const liveText = document.getElementById('liveText');
+  const clock = document.getElementById('clock');
+  const btnPlay = document.getElementById('btnPlay');
+  const btnStop = document.getElementById('btnStop');
+
+  enableScrollOnSlider(elFrec); enableScrollOnSlider(elAmp); enableScrollOnSlider(elArm); enableScrollOnSlider(elPhase);
+
+  const PASOS = 1200, CICLOS = 3;
+  let muestras = new Float64Array(PASOS);
+  let maxAbs = 1, offset = 0, lastTs = 0, rafId = null, sonando = false;
+  let audioCtx = null, osc = null, gain = null;
+
+  function getTraceColor(forma) {
+    if (forma === 'cuadrada') return '#00ff00';
+    if (forma === 'triangular') return '#00ccff';
+    if (forma === 'sierra') return '#ff3333';
+    if (forma === 'seno') return '#ffcc00';
+    return '#00ff00';
+  }
+
+  function coefB(forma, n) {
+    switch (forma) {
+      case 'seno':       return n === 1 ? 1 : 0;
+      case 'cuadrada':   return (n % 2) ? 4 / (n * Math.PI) : 0;
+      case 'triangular': return (n % 2) ? (8 / (n * n * Math.PI * Math.PI)) * Math.sin(n * Math.PI / 2) : 0;
+      case 'sierra':     return (-2 / (n * Math.PI)) * Math.pow(-1, n);
+      default:           return 0;
+    }
+  }
+
+  function updateFormula() {
+    const forma = elForma.value;
+    formulaDisplay.style.color = 'var(--text)'; 
+    formulaDisplay.style.textShadow = 'none';
+    
+    const frac = (num, den) => `<span class="fraction"><span class="num">${num}</span><span class="den">${den}</span></span>`;
+    
+    let html = `<i>f</i>(<i>t</i>) = `;
+    let nCount = 0;
+    let n = 1;
+    
+    while (nCount < 5) {
+      let b = 0;
+      let termHtml = '';
+      
+      if (forma === 'seno') {
+        termHtml = `sin(<i>ωt</i>)`;
+        nCount = 5; 
+      } 
+      else if (forma === 'cuadrada') {
+        if (n % 2 !== 0) {
+          b = 4 / (n * Math.PI);
+          const sign = (nCount > 0 && b > 0) ? ' <span class="op">+</span> ' : (nCount > 0 && b < 0) ? ' <span class="op">-</span> ' : '';
+          const den = n === 1 ? 'π' : `${n}π`;
+          termHtml = `${sign}${frac(4, den)} sin(${n===1?'':n}<i>ωt</i>)`;
+          nCount++;
+        }
+      } 
+      else if (forma === 'triangular') {
+        if (n % 2 !== 0) {
+          b = (8 / (n * n * Math.PI * Math.PI)) * Math.sin(n * Math.PI / 2);
+          const sign = (nCount > 0 && b > 0) ? ' <span class="op">+</span> ' : (nCount > 0 && b < 0) ? ' <span class="op">-</span> ' : '';
+          const den = n === 1 ? 'π<sup>2</sup>' : `${n*n}π<sup>2</sup>`;
+          termHtml = `${sign}${frac(8, den)} sin(${n===1?'':n}<i>ωt</i>)`;
+          nCount++;
+        }
+      } 
+      else if (forma === 'sierra') {
+        b = (-2 / (n * Math.PI)) * Math.pow(-1, n);
+        const sign = (nCount > 0 && b > 0) ? ' <span class="op">+</span> ' : (nCount > 0 && b < 0) ? ' <span class="op">-</span> ' : '';
+        const absB = Math.abs(b);
+        const num = absB * n * Math.PI;
+        const den = n === 1 ? 'π' : `${n}π`;
+        termHtml = `${sign}${frac(num, den)} sin(${n===1?'':n}<i>ωt</i>)`;
+        nCount++;
+      }
+      
+      html += termHtml;
+      n++;
+    }
+    
+    if (forma !== 'seno') html += ' <span class="op">+</span> ...';
+    
+    formulaDisplay.innerHTML = html;
+  }
+
+  function precomputar() {
+    const forma = elForma.value, freq = +elFrec.value, N = +elArm.value;
+    const phaseRad = (+elPhase.value) * Math.PI / 180;
+    const tMax = CICLOS / freq;
+
+    maxAbs = 0;
+    for (let i = 0; i < PASOS; i++) {
+      const t = (i / PASOS) * tMax;
+      let y = 0;
+      for (let n = 1; n <= N; n++) {
+        const b = coefB(forma, n);
+        if (b !== 0) y += b * Math.sin(2 * Math.PI * n * freq * t + phaseRad);
+      }
+      muestras[i] = y;
+      const a = Math.abs(y); if (a > maxAbs) maxAbs = a;
+    }
+    if (maxAbs === 0) maxAbs = 1;
+  }
+
+  function dibujarRejilla() {
+    const tc = getThemeColors();
+    ctx.fillStyle = tc.bg; ctx.fillRect(0, 0, W, H);
+    
+    ctx.strokeStyle = tc.grid; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x < W; x += 20) { ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, H); }
+    for (let y = 0; y < H; y += 20) { ctx.moveTo(0, y + .5); ctx.lineTo(W, y + .5); }
+    ctx.stroke();
+
+    ctx.strokeStyle = tc.gridBold; ctx.beginPath();
+    for (let x = 0; x < W; x += 100) { ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, H); }
+    for (let y = 0; y < H; y += 100) { ctx.moveTo(0, y + .5); ctx.lineTo(W, y + .5); }
+    ctx.stroke();
+
+    ctx.strokeStyle = tc.axis; ctx.lineWidth = 1.5;
+    ctx.beginPath(); 
+    ctx.moveTo(0, cy); ctx.lineTo(W, cy); 
+    ctx.moveTo(50, 0); ctx.lineTo(50, H); 
+    ctx.stroke();
+  }
+
+  function dibujarTraza() {
+    const forma = elForma.value, freq = +elFrec.value, N = +elArm.value, amp = +elAmp.value;
+    const phaseRad = (+elPhase.value) * Math.PI / 180;
+    const escala = (H * 0.4 / maxAbs) * (amp / 1.0);
+    const i0Base = Math.floor(offset), frac = offset - i0Base;
+    const tMax = CICLOS / freq;
+    const isLight = document.body.classList.contains('light-mode');
+
+    if (toggleArmonicos.checked) {
+      legendBox.style.display = 'flex';
+      ctx.save();
+      
+      const maxDrawArms = Math.min(N, 15); 
+
+      for (let n = 1; n <= maxDrawArms; n++) {
+        const b = coefB(forma, n); if (b === 0) continue;
+        
+        ctx.beginPath();
+        if (n === 1) { ctx.strokeStyle = isLight ? '#000000' : '#ffffff'; ctx.setLineDash([8, 6]); ctx.lineWidth = 2; }
+        else if (n === 3) { ctx.strokeStyle = '#0055ff'; ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5; }
+        else if (n === 5) { ctx.strokeStyle = '#00aa00'; ctx.setLineDash([2, 4]); ctx.lineWidth = 1.5; }
+        else if (n === 7) { ctx.strokeStyle = '#ff8800'; ctx.setLineDash([8, 4, 2, 4]); ctx.lineWidth = 1.5; }
+        else { ctx.strokeStyle = isLight ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.1)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1; }
+
+        for (let i = 0; i < PASOS; i += 2) {
+          const t = ((i + offset) % PASOS / PASOS) * tMax;
+          const yH = b * Math.sin(2 * Math.PI * n * freq * t + phaseRad) * escala;
+          const x = 50 + (i / (PASOS - 1)) * (W - 50); 
+          const y = cy - yH;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else {
+      legendBox.style.display = 'none';
+    }
+
+    const path = new Path2D();
+    for (let i = 0; i < PASOS; i++) {
+      const x = 50 + (i / (PASOS - 1)) * (W - 50);
+      const a = (i + i0Base) % PASOS, b = (a + 1) % PASOS;
+      const val = muestras[a] * (1 - frac) + muestras[b] * frac;
+      const y = cy - val * escala;
+      if (i === 0) path.moveTo(x, y); else path.lineTo(x, y);
+    }
+
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    
+    const color = getTraceColor(forma);
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    
+    const glows = [{w:8,a:0.1},{w:4,a:0.2}];
+    for (const glow of glows) {
+        ctx.strokeStyle = `rgba(${r},${g},${b},${glow.a})`;
+        ctx.lineWidth = glow.w; ctx.stroke(path);
+    }
+    ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke(path);
+  }
+
+  function dibujar() {
+    dibujarRejilla(); dibujarTraza();
+  }
+
+  function animar(ts) {
+    if (!sonando) return; 
+    if (!lastTs) lastTs = ts;
+    const dt = Math.min((ts - lastTs) / 1000, 0.1); lastTs = ts;
+    offset = (offset + dt * PASOS / 5) % PASOS;
+    dibujar(); rafId = requestAnimationFrame(animar);
+  }
+
+  function actualizarReadouts() {
+    const color = getTraceColor(elForma.value); 
+    
+    rFrec.innerHTML = elFrec.value + '<span class="unit">Hz</span>';
+    rAmp.textContent  = (+elAmp.value).toFixed(2);
+    rArm.textContent  = elArm.value;
+    rPhase.textContent= elPhase.value + '°';
+    vFrec.textContent = elFrec.value; vAmp.textContent = (+elAmp.value).toFixed(2);
+    vArm.textContent  = elArm.value; vPhase.textContent = elPhase.value;
+
+    [rFrec, rAmp, rArm, rPhase].forEach(el => { 
+        el.style.color = color; 
+        el.style.textShadow = `0 0 10px ${color}`; 
+    });
+
+    if (legendMainSignal) {
+        legendMainSignal.style.borderColor = color;
+    }
+  }
+
+  function aplicarCambios() {
+    precomputar(); actualizarReadouts(); updateFormula();
+    if (sonando) actualizarAudio(); else dibujar();
+  }
+
+  function crearWave(forma, N, phaseDeg) {
+    const real = new Float32Array(N + 1), imag = new Float32Array(N + 1);
+    const phaseRad = phaseDeg * Math.PI / 180;
+    for (let n = 1; n <= N; n++) {
+      const b = coefB(forma, n);
+      if (b !== 0) {
+        real[n] = b * Math.sin(phaseRad);
+        imag[n] = b * Math.cos(phaseRad);
+      }
+    }
+    return audioCtx.createPeriodicWave(real, imag, { disableNormalization: false });
+  }
+
+  async function reproducir() {
+    if (sonando) return;
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+    osc = audioCtx.createOscillator(); gain = audioCtx.createGain();
+    gain.gain.value = +elAmp.value / 2; 
+    osc.frequency.value = +elFrec.value;
+    osc.setPeriodicWave(crearWave(elForma.value, +elArm.value, +elPhase.value));
+    osc.connect(gain).connect(audioCtx.destination); osc.start();
+
+    sonando = true; btnPlay.disabled = true; btnStop.disabled = false;
+    liveInd.classList.replace('standby', 'on'); liveText.textContent = 'LIVE';
+    lastTs = 0; rafId = requestAnimationFrame(animar);
+  }
+
+  function detener() {
+    if (!sonando) return;
+    const t = audioCtx.currentTime;
+    gain.gain.cancelScheduledValues(t); gain.gain.setTargetAtTime(0, t, 0.02);
+    osc.stop(t + 0.1); osc.onended = () => { try { osc.disconnect(); gain.disconnect(); } catch(e){} };
+    osc = null; gain = null; sonando = false;
+    
+    btnPlay.disabled = false; btnStop.disabled = true;
+    liveInd.classList.replace('on', 'standby'); liveText.textContent = 'READY';
+    cancelAnimationFrame(rafId);
+  }
+
+  function actualizarAudio() {
+    if (!sonando || !osc) return;
+    const t = audioCtx.currentTime;
+    osc.frequency.setTargetAtTime(+elFrec.value, t, 0.01);
+    gain.gain.setTargetAtTime(+elAmp.value / 2, t, 0.02);
+    osc.setPeriodicWave(crearWave(elForma.value, +elArm.value, +elPhase.value));
+  }
+
+  function tick() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    clock.textContent = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  elForma.addEventListener('change', aplicarCambios);
+  elFrec.addEventListener('input', aplicarCambios);
+  elArm.addEventListener('input', aplicarCambios);
+  elPhase.addEventListener('input', aplicarCambios);
+  toggleArmonicos.addEventListener('change', dibujar);
+  elAmp.addEventListener('input', () => { actualizarReadouts(); if (sonando) actualizarAudio(); else dibujar(); });
+  btnPlay.addEventListener('click', reproducir); btnStop.addEventListener('click', detener);
+
+  window.addEventListener('resize', resize);
+  resize(); tick(); setInterval(tick, 1000);
+  actualizarReadouts(); precomputar(); updateFormula();
+})();
+
+/* ================================================================
+   MÓDULO 2 · Analizador FFT y Espectrograma
+   ================================================================ */
+(() => {
+  let timeCanvas = document.getElementById('timeCanvas');
+  let fftCanvas = document.getElementById('fftCanvas');
+  let specCanvas = document.getElementById('specCanvas');
+  
+  let tCtx, fCtx, sCtx, W_T, H_T, W_F, H_F, W_S, H_S;
+
+  function resize() {
+    const st = setupHiDPI(timeCanvas); tCtx = st.ctx; W_T = st.width; H_T = st.height;
+    const sf = setupHiDPI(fftCanvas); fCtx = sf.ctx; W_F = sf.width; H_F = sf.height;
+    const ss = setupHiDPI(specCanvas); sCtx = ss.ctx; W_S = ss.width; H_S = ss.height;
+    if (lastFreqData) { drawStaticAll(mouseX); }
+  }
+
+  const micInd  = document.getElementById('micInd');
+  const micText = document.getElementById('micText');
+  const rPeak   = document.getElementById('rPeak');
+  const rLevel  = document.getElementById('rLevel');
+  const rRms    = document.getElementById('rRms');
+  const startBtn = document.getElementById('startMicBtn');
+  const stopBtn  = document.getElementById('stopMicBtn');
+  const tooltip = document.getElementById('fftTooltip');
+  const tooltipFreq = document.getElementById('tooltipFreq');
+  const tooltipLevel = document.getElementById('tooltipLevel');
+
+  const MAX_FREQ = 10000;
+  const TARGET_LABELS = [0, 2500, 5000, 7500, 10000];
+  const PEAK_THRESHOLD = 110;
+
+  let micStream = null, micCtx = null, analyser = null, rafId = null;
+  let timeData, freqData, hzPerBin = 0;
+  
+  let isMicLive = false;
+  let lastFreqData = null, lastTimeData = null, lastHzPerBin = 0;
+  let mouseX = -1;
+
+  function getSpecColor(v) {
+    if (v < 64) return `rgb(0,0,${v * 4})`;
+    if (v < 128) return `rgb(0,${(v - 64) * 4},255)`;
+    if (v < 192) return `rgb(${(v - 128) * 4},255,255)`;
+    return `rgb(255,${255 - (v - 192) * 4},255)`;
+  }
+
+  function drawGrid(ctx, W, H, isFFT) {
+    const tc = getThemeColors();
+    ctx.fillStyle = tc.bg; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = tc.grid; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x < W; x += 20) { ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, H); }
+    for (let y = 0; y < H; y += 20) { ctx.moveTo(0, y + .5); ctx.lineTo(W, y + .5); }
+    ctx.stroke();
+
+    ctx.strokeStyle = tc.gridBold; ctx.beginPath();
+    for (let x = 0; x < W; x += 100) { ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, H); }
+    for (let y = 0; y < H; y += 100) { ctx.moveTo(0, y + .5); ctx.lineTo(W, y + .5); }
+    ctx.stroke();
+
+    ctx.strokeStyle = isFFT ? (document.body.classList.contains('light-mode') ? 'rgba(200,150,0,0.6)' : 'rgba(255,204,0,0.4)') : tc.axis;
+    ctx.beginPath();
+    ctx.moveTo(0, isFFT ? H - 1 : H / 2); ctx.lineTo(W, isFFT ? H - 1 : H / 2); ctx.stroke();
+  }
+
+  function strokeGlow(ctx, path, colorStr, widths, alphas) {
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (let i = 0; i < widths.length; i++) {
+      ctx.strokeStyle = `rgba(${colorStr},${alphas[i]})`;
+      ctx.lineWidth = widths[i]; ctx.stroke(path);
+    }
+  }
+
+  function renderTime(data) {
+    drawGrid(tCtx, W_T, H_T, false);
+    const path = new Path2D();
+    const sliceW = W_T / data.length;
+    let rmsSum = 0;
+
+    for (let i = 0; i < data.length; i++) {
+      const val = data[i];
+      const dev = (val - 128) / 128;
+      rmsSum += dev * dev;
+      
+      const x = i * sliceW;
+      const y = H_T - (val / 255) * H_T;
+      if (i === 0) path.moveTo(x, y); else path.lineTo(x, y);
+    }
+    
+    const rms = Math.sqrt(rmsSum / data.length);
+
+    strokeGlow(tCtx, path, '0,255,0', [10, 6, 3], [0.05, 0.10, 0.20]);
+    tCtx.strokeStyle = '#00ff00'; tCtx.lineWidth = 2; tCtx.stroke(path);
+    tCtx.strokeStyle = '#ccffcc'; tCtx.lineWidth = 0.8; tCtx.stroke(path);
+
+    const tc = getThemeColors();
+    tCtx.fillStyle = tc.text; tCtx.globalAlpha = 0.8;
+    tCtx.font = '11px Consolas, monospace'; tCtx.textAlign = 'left';
+    tCtx.fillText('DOMINIO DEL TIEMPO', 12, 18);
+    tCtx.globalAlpha = 1.0;
+
+    return rms;
+  }
+
+  function renderFFT(data, hzBin, crosshairX = -1) {
+    drawGrid(fCtx, W_F, H_F, true);
+    const maxBin = Math.min(Math.floor(MAX_FREQ / hzBin), data.length);
+
+    fCtx.beginPath(); fCtx.moveTo(0, H_F);
+    for (let i = 0; i <= maxBin; i++) {
+      const x = (i / maxBin) * W_F, y = H_F - (data[i] / 255) * (H_F - 8);
+      fCtx.lineTo(x, y);
+    }
+    fCtx.lineTo(W_F, H_F); fCtx.closePath();
+    fCtx.fillStyle = document.body.classList.contains('light-mode') ? 'rgba(200,150,0,0.15)' : 'rgba(255,204,0,0.1)';
+    fCtx.fill();
+
+    const spec = new Path2D();
+    for (let i = 0; i <= maxBin; i++) {
+      const x = (i / maxBin) * W_F, y = H_F - (data[i] / 255) * (H_F - 8);
+      if (i === 0) spec.moveTo(x, y); else spec.lineTo(x, y);
+    }
+    strokeGlow(fCtx, spec, document.body.classList.contains('light-mode') ? '200,150,0' : '255,204,0', [8, 4], [0.05, 0.15]);
+    fCtx.strokeStyle = document.body.classList.contains('light-mode') ? '#cc9900' : '#ffcc00';
+    fCtx.lineWidth = 2; fCtx.stroke(spec);
+    fCtx.strokeStyle = document.body.classList.contains('light-mode') ? '#ffdd66' : '#fff8cc';
+    fCtx.lineWidth = 0.8; fCtx.stroke(spec);
+
+    const tc = getThemeColors();
+    fCtx.strokeStyle = 'rgba(255, 204, 0, 0.2)'; fCtx.fillStyle = tc.text; fCtx.globalAlpha = 0.6;
+    fCtx.font = '11px Consolas, monospace'; fCtx.textAlign = 'center';
+    TARGET_LABELS.forEach(fq => {
+      const x = (fq / MAX_FREQ) * W_F;
+      fCtx.beginPath(); fCtx.moveTo(x, 0); fCtx.lineTo(x, H_F); fCtx.stroke();
+      fCtx.fillText(fq >= 1000 ? (fq/1000).toFixed(1) + 'k' : fq + '', x, H_F - 6);
+    });
+    fCtx.globalAlpha = 1.0;
+
+    if (crosshairX >= 0 && crosshairX <= W_F) {
+      fCtx.strokeStyle = document.body.classList.contains('light-mode') ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)';
+      fCtx.setLineDash([4, 4]);
+      fCtx.beginPath(); fCtx.moveTo(crosshairX, 0); fCtx.lineTo(crosshairX, H_F); fCtx.stroke();
+      fCtx.setLineDash([]);
+    }
+
+    let dominantFreq = 0, dominantLevel = 0;
+    for (let i = 2; i < maxBin - 2; i++) {
+      const val = data[i];
+      if (val > PEAK_THRESHOLD && val > data[i-1] && val > data[i+1] && val > data[i-2] && val > data[i+2]) {
+        const freq = Math.round(i * hzBin), x = (i / maxBin) * W_F, y = H_F - (val / 255) * (H_F - 8);
+        if (val > dominantLevel) { dominantLevel = val; dominantFreq = freq; }
+        fCtx.beginPath(); fCtx.arc(x, y, 3, 0, 2 * Math.PI);
+        fCtx.fillStyle = 'rgba(255, 51, 51, 0.8)'; fCtx.fill();
+        fCtx.fillStyle = document.body.classList.contains('light-mode') ? '#000' : '#fff'; fCtx.font = 'bold 11px Consolas, monospace'; fCtx.textAlign = 'center';
+        fCtx.fillText(freq >= 1000 ? (freq/1000).toFixed(2) + ' kHz' : freq + ' Hz', x, y - 10);
+        i += 5;
+      }
+    }
+
+    fCtx.fillStyle = tc.text; fCtx.globalAlpha = 0.8; fCtx.font = '11px Consolas, monospace'; fCtx.textAlign = 'left';
+    fCtx.fillText('DOMINIO DE LA FRECUENCIA (FFT)', 12, 18);
+    fCtx.globalAlpha = 1.0;
+
+    return { dominantFreq, dominantLevel };
+  }
+
+  function renderSpec(data, isLive) {
+    if (!isLive) return;
+    sCtx.drawImage(specCanvas, -1, 0);
+    const maxBin = Math.min(Math.floor(MAX_FREQ / hzPerBin), data.length);
+    const colX = W_S - 1;
+    for (let i = 0; i < maxBin; i++) {
+      const y = H_S - (i / maxBin) * H_S;
+      const h = H_S / maxBin;
+      sCtx.fillStyle = getSpecColor(data[i]);
+      sCtx.fillRect(colX, y - h, 1, h + 1);
+    }
+  }
+
+  function drawStaticAll(crosshairX) {
+    if (!lastTimeData || !lastFreqData) return;
+    const rms = renderTime(lastTimeData);
+    const res = renderFFT(lastFreqData, lastHzPerBin, crosshairX);
+    rPeak.textContent = res.dominantFreq ? (res.dominantFreq >= 1000 ? (res.dominantFreq/1000).toFixed(2) + ' kHz' : res.dominantFreq + ' Hz') : '-- Hz';
+    rLevel.textContent = res.dominantLevel ? Math.round((res.dominantLevel / 255) * 100) + '%' : '--';
+    rRms.textContent = (rms * 100).toFixed(1);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  fftCanvas.addEventListener('mousemove', (e) => {
+    const rect = fftCanvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    const data = isMicLive ? freqData : lastFreqData;
+    const hzBin = isMicLive ? hzPerBin : lastHzPerBin;
+
+    if (data && hzBin > 0) {
+      const freq = Math.round((mouseX / W_F) * MAX_FREQ);
+      const bin = Math.floor(freq / hzBin);
+      const level = data[bin] || 0;
+      tooltip.style.display = 'block'; tooltip.style.left = (mouseX + 15) + 'px';
+      tooltipFreq.textContent = freq; tooltipLevel.textContent = Math.round((level / 255) * 100);
+      if (!isMicLive) drawStaticAll(mouseX);
+    }
+  });
+
+  fftCanvas.addEventListener('mouseleave', () => {
+    mouseX = -1; tooltip.style.display = 'none';
+    if (!isMicLive) drawStaticAll(-1);
+  });
+
+  startBtn.addEventListener('click', async () => {
+    if (rafId) cancelAnimationFrame(rafId);
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micCtx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = micCtx.createAnalyser();
+      analyser.fftSize = 4096; analyser.smoothingTimeConstant = 0.88;
+      const src = micCtx.createMediaStreamSource(micStream); src.connect(analyser);
+      timeData = new Uint8Array(analyser.fftSize);
+      freqData = new Uint8Array(analyser.frequencyBinCount);
+      hzPerBin = (micCtx.sampleRate / 2) / freqData.length;
+
+      const tc = getThemeColors(); sCtx.fillStyle = tc.bg; sCtx.fillRect(0, 0, W_S, H_S);
+
+      isMicLive = true;
+      micInd.classList.replace('standby', 'on');
+      micInd.querySelector('.dot').style.background = 'var(--trace-fft)';
+      micInd.querySelector('.dot').style.boxShadow = '0 0 10px var(--trace-fft)';
+      micText.textContent = 'LIVE';
+      startBtn.disabled = true; stopBtn.disabled = false;
+
+      processMic();
+    } catch (err) { alert('No se pudo acceder al micrófono.\nDetalle: ' + err.message); }
+  });
+
+  stopBtn.addEventListener('click', () => {
+    if (micStream) micStream.getTracks().forEach(t => t.stop());
+    if (micCtx) micCtx.close();
+    if (rafId) cancelAnimationFrame(rafId);
+    
+    if (freqData) {
+      lastFreqData = new Uint8Array(freqData);
+      lastTimeData = new Uint8Array(timeData);
+      lastHzPerBin = hzPerBin;
+    }
+    
+    micStream = null; micCtx = null; analyser = null; rafId = null;
+    isMicLive = false;
+    
+    micInd.classList.replace('on', 'standby');
+    micInd.querySelector('.dot').style.background = '';
+    micInd.querySelector('.dot').style.boxShadow = '';
+    micText.textContent = 'OFFLINE';
+    startBtn.disabled = false; stopBtn.disabled = true;
+    
+    drawStaticAll(mouseX);
+  });
+
+  function processMic() {
+    if (!analyser) return;
+    rafId = requestAnimationFrame(processMic);
+
+    analyser.getByteTimeDomainData(timeData);
+    analyser.getByteFrequencyData(freqData);
+
+    const rms = renderTime(timeData);
+    const res = renderFFT(freqData, hzPerBin, mouseX);
+    renderSpec(freqData, true);
+
+    rPeak.textContent = res.dominantFreq ? (res.dominantFreq >= 1000 ? (res.dominantFreq/1000).toFixed(2) + ' kHz' : res.dominantFreq + ' Hz') : '-- Hz';
+    rLevel.textContent = res.dominantLevel ? Math.round((res.dominantLevel / 255) * 100) + '%' : '--';
+    rRms.textContent = (rms * 100).toFixed(1);
+  }
+
+  const clock2 = document.getElementById('clock2');
+  function tick2() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    clock2.textContent = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+  tick2(); setInterval(tick2, 1000);
+})();
+</script>
+</body>
+</html>
